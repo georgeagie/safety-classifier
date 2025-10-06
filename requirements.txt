@@ -1,0 +1,8 @@
+jax
+jaxlib
+dynamaxsys
+cbfax
+qpax
+numpy
+matplotlib
+equinox
