@@ -6,3 +6,4 @@ qpax
 numpy
 matplotlib
 equinox
+PyQt5

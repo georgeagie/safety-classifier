@@ -9,7 +9,8 @@ import qpax
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg")  
+matplotlib.use("Qt5Agg")  
+# matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps):
@@ -22,6 +23,9 @@ def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps
     axs[0].set_ylabel('y')
     axs[0].set_aspect('equal') 
 
+    axs[0].set_xlim(-1, 11)
+    axs[0].set_ylim(-1, 11)
+
     axs[1].plot(jnp.arange(time_steps), trajectory[:,2])
     axs[1].set_xlabel('time step')
     axs[1].set_ylabel('x control')
@@ -31,11 +35,9 @@ def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps
     axs[2].set_ylabel('y control')
 
     # TODO: uncomment this when CBF code is finished
-    # axs[3].plot(jnp.arange(time_steps), slack_values)
-    # axs[3].set_xlabel('time step')
-    # axs[3].set_ylabel('slack variable')
-
-    plt.savefig("output/trajectory.png")
+    axs[3].plot(jnp.arange(time_steps), slack_values)
+    axs[3].set_xlabel('time step')
+    axs[3].set_ylabel('slack variable')
 
 @jax.jit
 def policy(state: jax.Array, goal: jax.Array, scale: float = 1.0) -> jax.Array:
@@ -52,13 +54,39 @@ def policy(state: jax.Array, goal: jax.Array, scale: float = 1.0) -> jax.Array:
     control = scale*(goal - state)
     return control
 
+def calculate_LQR_gains(Q, R, A, B, time_steps) :
+    N = time_steps
+    P = []
+    K = []
 
-# state is basically is just x, y
-# same with goal, but it's where we wanna go
-def LQR_policy(state: jax.Array, goal: jax.Array) -> jax.Array:
-    # TODO: implement LQR
+    for i in range(N + 1):
+        P.append(jnp.zeros((2, 2)))
+
+    for i in range(N):
+        K.append(jnp.zeros((2, 2)))
+
+    P[N] = Q
+
+    for i in range(N - 1, -1, -1):
+        # calculate K_i = (R + B.T * P_{i+1} * B)^-1 * (B.T * P_{i+1} * A)
+        # split equation into two parts:
+        #   (R + B.T * P_{i+1} * B)^-1
+        #   (B.T * P_{i+1} * A)
+        eq_first = R + B.T @ P[i + 1] @ B
+        eq_second = B.T @ P[i + 1] @ A
+        # jnp.linalg.solve takes the inverse of the first eq and multiplies it with second
+        K[i] = jnp.linalg.solve(eq_first, eq_second) 
+
+        # calculate DARE so you have the P value for next pass
+        # note: we could substitute K[i] with (R + B.T * P_{i+1} * B)^-1 * (B.T * P_{i+1} * A)
+        P[i] = Q + A.T @ P[i + 1] @ A - A.T @ P[i + 1] @ B @ K[i]
     
-    control = -K @ (goal - state)
+    return K
+
+def LQR_policy(state: jax.Array, goal: jax.Array, K) -> jax.Array:
+    # TODO: implement LQR
+    state_error = state - goal
+    control = -1 * K[0] @ state_error
     return control
 
 @jax.jit
@@ -76,6 +104,20 @@ def form_cbf_qp(state: jax.Array, nominal_control: jax.Array, obstacle_state: ja
         tuple: CBF-QP parameters (Q, q, A, b, G, h)
     """
     # TODO: implement CBF-QP
+    p = state - obstacle_state # 2 x 1
+    h_x = p.T @ p - radius**2 
+    grad_h = 2.0 * p
+    Lf_h = 0.0
+    Lg_h = grad_h
+
+    # QP parameters
+    G = -jnp.expand_dims(Lg_h, axis=0)
+    h_qp = Lf_h + alpha * h_x
+    h = jnp.array([h_qp])
+    Q = jnp.eye(2)
+    q = -2.0 * nominal_control
+    A = jnp.empty((0, 2))
+    b = jnp.empty((0,))
     return Q, q, A, b, G, h
 
 @jax.jit
@@ -93,6 +135,9 @@ def apply_CBF(state: jax.Array, control: jax.Array, obstacle_state: jax.Array, r
         tuple: Safe control and the slack on the safety constraint
     """
     # TODO: apply CBF-QP to control
+    Q, q, A, b, G, h = form_cbf_qp(state, control, obstacle_state, radius, alpha)
+    safe_control, slack_vector, _, _, _, _ = qpax.solve_qp(Q, q, A, b, G, h, solver_tol=1e-3)
+    slack = slack_vector[0]
     return safe_control, slack
 
 
@@ -105,42 +150,50 @@ def main():
     # agent state and goal init
     state = jnp.zeros(dynamics.state_dim)
     goal_state = jnp.array([10, 10])
-    print(state)
-    print(goal_state)
 
     # obstacle 
     obstacle_state = jnp.array([5.5,5])
     
     # safety profile
     radius = 3
-    alpha = 5
+    alpha = 2
+
+    # LQR params
+    Q = jnp.eye(2) 
+    R = jnp.eye(2)
+    A = jnp.eye(2)
+    B = jnp.eye(2) * dt
+    K_list = calculate_LQR_gains(Q, R, A, B, time_steps)
+    K = jnp.array(K_list)
 
     # simulation loop
     trajectory = []
     slack_values = []
     for k in range(time_steps):
         # nominal control
-        control = policy(state, goal_state)
+        # control = policy(state, goal_state)
+        control = LQR_policy(state, goal_state, K)
         # TODO: uncomment this when CBF code is finished
         # # augment control for safety
-        # control, slack = apply_CBF(state, control, obstacle_state, radius, alpha)
+        control, slack = apply_CBF(state, control, obstacle_state, radius, alpha)
+
 
         # upate trajectory history
         trajectory.append(jnp.concat([state, control]).squeeze())
-        # slack_values.append(slack)
+        slack_values.append(slack)
 
         # apply dynamics
-        # state = state + dt* (state, control, dt*k)
-        
+        state = state + dt*dynamics(state, control, dt*k)
 
 
     trajectory = jnp.array(trajectory)
     # TODO: uncomment this when CBF code is finished
-    # slack_values = jnp.array(slack_values).squeeze()
-    # np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_state, radius=radius, alpha=alpha)
+    slack_values = jnp.array(slack_values).squeeze()
+    np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_state, radius=radius, alpha=alpha)
 
-    slack_values = None # change this later
     plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps)
+    # plt.show()
+    plt.savefig("output/cbf.png")
 
 if __name__=='__main__':
     main()
