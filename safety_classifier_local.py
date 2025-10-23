@@ -140,6 +140,19 @@ def apply_CBF(state: jax.Array, control: jax.Array, obstacle_state: jax.Array, r
     slack = slack_vector[0]
     return safe_control, slack
 
+def generate_labels(slack_values: jax.Array) -> jax.Array:
+    """
+    Labels state action pairs based on the slack variable, assuming LOW SLACK indicates DANGER/CRITICALITY.
+
+    - 1 (safety-critical): Slack <= threshold (Control needs deviation because nominal path is dangerous).
+    - 0 (nominal): Slack > threshold (High slack indicates the nominal control is far from the danger boundary).
+    """
+    # Compare slack values to the threshold
+    # Now, slack_values <= threshold (low slack) results in True, which becomes 1 (safety-critical).
+    threshold = 1.0
+    labels = (slack_values <= threshold).astype(jnp.int32)
+    return labels
+
 
 def main():
     # simulation agent set up
@@ -189,7 +202,8 @@ def main():
     trajectory = jnp.array(trajectory)
     # TODO: uncomment this when CBF code is finished
     slack_values = jnp.array(slack_values).squeeze()
-    np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_state, radius=radius, alpha=alpha)
+    labels = generate_labels(slack_values)
+    np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_state, radius=radius, alpha=alpha, labels=labels)
 
     plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps)
     # plt.show()

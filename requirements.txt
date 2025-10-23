@@ -7,3 +7,4 @@ numpy
 matplotlib
 equinox
 PyQt5
+pandas
