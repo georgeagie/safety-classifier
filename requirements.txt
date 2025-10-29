@@ -8,3 +8,4 @@ matplotlib
 equinox
 PyQt5
 pandas
+tqdm

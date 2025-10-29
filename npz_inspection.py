@@ -1,30 +1,41 @@
 import numpy as np
-import jax.numpy as jnp
 
-# looks at the npz file yielded from our data from sim
-data = np.load('data/safe_profile.npz')
+master_filename = "data/master_sim_data.npz"
 
-# Print the names of the arrays stored inside
-print("Arrays contained in the file:", data.files) 
+try:
+    # 1. Load the NPZ file
+    # The 'allow_pickle=True' is often necessary for NPZ files, though less so 
+    # when only saving simple JAX/NumPy arrays. It's a good practice to include.
+    data = np.load(master_filename, allow_pickle=True)
 
+    print(f"--- Inspection of: {master_filename} ---\n")
 
-# Convert the trajectory data to a JAX array
-# The trajectory contains: [state_x, state_y, control_x, control_y]
-jnp_trajectory = jnp.array(data['trajectory'])
+    # 2. View the Keys (Array Names)
+    print("✅ Arrays contained in the file (Keys):")
+    print(list(data.keys()))
+    print("-" * 35)
 
-# Access and convert the labels to a JAX array
-jnp_labels = jnp.array(data['labels'])
+    # 3. Inspect the Shape and Type of Key Arrays
+    print("📋 Data Structure Details:")
+    
+    # Iterate through each saved array and print its properties
+    for key in data.keys():
+        array = data[key]
+        
+        # Check if the array is a scalar (like time_steps or dt)
+        if array.shape == ():
+            print(f"  - {key:<20}: Value={array.item():<8} | Type={array.dtype}")
+        else:
+            print(f"  - {key:<20}: Shape={str(array.shape):<15} | Type={array.dtype}")
 
-# Access and convert the slack values to a JAX array
-jnp_slack = jnp.array(data['slack'])
+    # 4. Access a specific array
+    print("\n💡 Example: Inspecting the primary training features (X_data_flat)")
+    X_flat_shape = data['X_data_flat'].shape
+    print(f"  - Shape of X_data_flat: {X_flat_shape}")
+    print(f"  - First 3 samples:\n{data['X_data_flat'][:3]}")
+    
+    # Don't forget to close the NpzFile object when done (good practice)
+    data.close()
 
-# Analyze the labels using jax.numpy functions
-# jnp.sum() works on the boolean/integer array to count '1's
-safety_critical_count = jnp.sum(jnp_labels) 
-nominal_count = len(jnp_labels) - safety_critical_count
-
-print("Total time steps:", len(jnp_labels))
-print(f"Safety-Critical steps (Label 1): {safety_critical_count}")
-print(f"Nominal steps (Label 0): {nominal_count}")
-
-data.close()
+except FileNotFoundError:
+    print(f"ERROR: File not found at '{master_filename}'. Please check the path.")

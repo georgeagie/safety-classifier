@@ -73,7 +73,7 @@ def npz_to_csv_multiple_arrays(npz_file_path, csv_file_path):
 # --- Execution ---
 
 # You might need to adjust the input file name based on your data generation script
-input_file = "data/safe_profile.npz" 
+input_file = "data/master_sim_data.npz" 
 output_file = "data/safe_critical_full_dataset.csv"
 
 # Ensure the output directory exists
