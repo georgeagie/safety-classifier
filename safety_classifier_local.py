@@ -9,7 +9,7 @@ import qpax
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg") # Using 'Agg' is safer for non-GUI environments like Colab
+matplotlib.use("Agg") # Using 'Agg' is better for no gui
 import matplotlib.pyplot as plt
 
 def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps, goal_state):
@@ -32,7 +32,7 @@ def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps
         markersize=12, 
         color='red', 
         label='Goal State',
-        zorder=5 # Ensure the marker is on top of the line
+        zorder=5 # Ensure the marker is on top of the plot
     )
 
     axs[1].plot(jnp.arange(time_steps), trajectory[:,2])
@@ -120,17 +120,15 @@ def run_sim(state, goal_state, obstacle_state, run_id):
     active_steps = []
     
     for k in range(time_steps):
-        # 1. nominal control
-        nominal_control = LQR_policy(state, goal_state, K[k]) # Renamed to nominal_control
+        control = LQR_policy(state, goal_state, K[k]) # Renamed to control
         
-        # 2. augment control for safety (control is now the safe control)
-        safe_control, slack = apply_CBF(state, nominal_control, obstacle_state, radius, alpha) 
+        safe_control, slack = apply_CBF(state, control, obstacle_state, radius, alpha) 
 
-        # 3. Augmentation: Calculate Context Features
+        # these are new features for NN
         relative_goal = goal_state - state
-        relative_obstacle = state - obstacle_state # Vector 'p' used in CBF
+        relative_obstacle = state - obstacle_state 
         
-        # 4. Form the complete 8D feature vector
+        # 8D feature vector
         augmented_feature_vector = jnp.concatenate([
             state, 
             safe_control, 
@@ -138,29 +136,28 @@ def run_sim(state, goal_state, obstacle_state, run_id):
             relative_obstacle
         ]).squeeze()
 
-        # 5. Check for Active Step (using the SAFE control magnitude)
+        # filter out state-action pairs where there's barely any movement
         control_magnitude = jnp.linalg.norm(safe_control)
         is_active = (control_magnitude > CONTROL_THRESHOLD)
         active_steps.append(is_active)
 
-        # 6. Update history
+        # Update history
         augmented_trajectory_history.append(augmented_feature_vector)
         slack_values.append(slack)
 
-        # 7. Apply dynamics
-        state = state + dt*dynamics(state, safe_control, dt*k) # Use the SAFE control
+        # Apply dynamics
+        state = state + dt*dynamics(state, safe_control, dt*k) 
 
 
-    # --- FIX: Convert the list of vectors into a 2D array (N_steps, 8) ---
+    # convert to jnp arrays
     augmented_trajectory = jnp.array(augmented_trajectory_history) 
     slack_values = jnp.array(slack_values).squeeze()
     labels = generate_labels(slack_values)
     active_steps = jnp.array(active_steps).squeeze() 
     
-    # The plotting trajectory is [x1, x2, u1, u2] which are the first 4 elements.
+    # only need first 4 for plotting (state1, state2, action1, action2)
     plotting_trajectory = augmented_trajectory[:, :4] 
 
-    # Return the augmented data, slack, labels, filter, and the plotting data
     return augmented_trajectory, slack_values, labels, active_steps, plotting_trajectory
 
 # constants for all sims
@@ -179,36 +176,32 @@ B = jnp.eye(2) * dt
 K_list = calculate_LQR_gains(Q, R, A, B, time_steps)
 K = jnp.array(K_list)
 # key for random state generation
-# Set a PRNG key for reproducibility
 key = jax.random.PRNGKey(42)
 
-# --- CONSTANTS ---
-N_TOTAL = 200 # Total number of simulation runs
-N_PER_ZONE = 50 # Number of points per zone
-ZONE_SIZE = 3.0 # The 3x3 area size
-MAX_COORD = 15.0 # Max coordinate bound
+N_TOTAL = 200 # total number of simulation runs
+N_PER_ZONE = 50 # number of points per zone
+ZONE_SIZE = 3.0 # the 3x3 area size
+MAX_COORD = 15.0 # max coordinate bound
 
-# Define the boundaries for the 4 zones (min_x, max_x, min_y, max_y)
 ZONE_BOUNDARIES = {
-    # Start Zones (Top-Left: 0,0 to 3,3)
     'BL': (0.0, ZONE_SIZE, 0.0, ZONE_SIZE),             # Bottom-Left
     'TL': (0.0, ZONE_SIZE, MAX_COORD - ZONE_SIZE, MAX_COORD), # Top-Left
     'TR': (MAX_COORD - ZONE_SIZE, MAX_COORD, MAX_COORD - ZONE_SIZE, MAX_COORD), # Top-Right
     'BR': (MAX_COORD - ZONE_SIZE, MAX_COORD, 0.0, ZONE_SIZE),  # Bottom-Right
 }
 
-# The sequence for start states
+# sequence for start states
 START_ZONE_SEQUENCE = ['BL', 'TL', 'TR', 'BR']
 
-# The mirrored sequence for goal states
+# opposing the sequences for goal states
 GOAL_ZONE_SEQUENCE = ['TR', 'BR', 'BL', 'TL']
 
-# Center 3x3 area for obstacles
+# center 3x3 area for obstacles
 OBS_MIN = (MAX_COORD / 2.0) - (ZONE_SIZE / 2.0)  # 7.5 - 1.5 = 6.0
 OBS_MAX = (MAX_COORD / 2.0) + (ZONE_SIZE / 2.0)  # 7.5 + 1.5 = 9.0
 OBS_BOUNDARY = (OBS_MIN, OBS_MAX, OBS_MIN, OBS_MAX) # (6.0, 9.0, 6.0, 9.0)
 
-def generate_zoned_states(num_states):
+def generate_zoned_states():
     """
     Generates JAX arrays for start, goal, and obstacle states 
     based on the specified 4-zone structure.
@@ -223,40 +216,42 @@ def generate_zoned_states(num_states):
         s_zone = START_ZONE_SEQUENCE[zone_index]
         g_zone = GOAL_ZONE_SEQUENCE[zone_index]
         
-        # Get (min_x, max_x, min_y, max_y) for start and goal zones
+        # get (min_x, max_x, min_y, max_y) for start and goal zones
         s_min_x, s_max_x, s_min_y, s_max_y = ZONE_BOUNDARIES[s_zone]
         g_min_x, g_max_x, g_min_y, g_max_y = ZONE_BOUNDARIES[g_zone]
         
-        # Get (min_x, max_x, min_y, max_y) for obstacle center zone
+        # get (min_x, max_x, min_y, max_y) for obstacle center zone
         o_min_x, o_max_x, o_min_y, o_max_y = OBS_BOUNDARY
-
+        
+        # generates all the "random" start, goal, and obstacle states
         for i in range(N_PER_ZONE):
-            key, s_key, g_key, o_key, jitter_key = jax.random.split(key, 5)
+            key, s_key, g_key, o_key, random_key = jax.random.split(key, 5)
 
-            # 1. Generate Start State (x, y)
+            # generate starts
             start_x = jax.random.uniform(s_key, shape=(), minval=s_min_x, maxval=s_max_x)
             start_y = jax.random.uniform(s_key, shape=(), minval=s_min_y, maxval=s_max_y)
             start_state_base = jnp.array([start_x, start_y])
 
-            # 2. Generate Goal State (x, y)
+            # generate goals
             goal_x = jax.random.uniform(g_key, shape=(), minval=g_min_x, maxval=g_max_x)
             goal_y = jax.random.uniform(g_key, shape=(), minval=g_min_y, maxval=g_max_y)
             goal_state_base = jnp.array([goal_x, goal_y])
             
-            # 3. Generate Obstacle State (x, y)
+            # generate obstacles
             obs_x = jax.random.uniform(o_key, shape=(), minval=o_min_x, maxval=o_max_x)
             obs_y = jax.random.uniform(o_key, shape=(), minval=o_min_y, maxval=o_max_y)
             obstacle_state_base = jnp.array([obs_x, obs_y])
 
-            # 4. Apply Jitter (Random digit in the thousandth place)
-            jitter_digits = jax.random.randint(jitter_key, shape=(6,), minval=1, maxval=10)
-            jitter_array = jitter_digits / 1000.0 # Convert to [0.001, 0.009]
+            # create random digits to make sure none of the points perfectly line up
+            random_digits = jax.random.randint(random_key, shape=(6,), minval=1, maxval=10)
+            random_array = random_digits / 1000.0 
 
-            start_state = start_state_base + jitter_array[:2]
-            goal_state = goal_state_base + jitter_array[2:4]
-            obstacle_state = obstacle_state_base + jitter_array[4:6]
+            # add the random digits
+            start_state = start_state_base + random_array[:2]
+            goal_state = goal_state_base + random_array[2:4]
+            obstacle_state = obstacle_state_base + random_array[4:6]
             
-            # Store the generated states
+            # store the generated states
             start_list.append(start_state)
             goal_list.append(goal_state)
             obstacle_list.append(obstacle_state)
@@ -264,20 +259,17 @@ def generate_zoned_states(num_states):
     return start_list, goal_list, obstacle_list
 
 def main():
-    # 1. GENERATE STATES
     start_states, goal_states, obstacle_states = generate_zoned_states(200)
     
+    # plot these tests
     PLOT_INDICES = {40, 80, 120, 160, 199}
 
-    # 2. INITIALIZE MASTER LISTS FOR AGGREGATION
     all_augmented_trajectories = []  
     all_slacks = []        
     all_labels = []        
-    
-    # 3. RUN SIMULATIONS AND AGGREGATE DATA
+
     for i, (start_state, goal_state, obstacle_state) in enumerate(zip(start_states, goal_states, obstacle_states)):
         
-        # Run simulation and get 5 results
         augmented_trajectory_run, slack_values_run, labels_run, active_steps_run, plotting_trajectory_run = run_sim(
             start_state, 
             goal_state, 
@@ -286,7 +278,7 @@ def main():
         )
 
         if i in PLOT_INDICES:
-            print(f"Plotting and saving Run {i}...")
+            print(f"Plotting and saving Run {i}")
             
             # Use the plotting trajectory which contains [x, y, u_x, u_y]
             plot_trajectory(
@@ -298,33 +290,34 @@ def main():
                 goal_state=goal_state
             )
             
-            # Save the figure to a file
+            # save the figure to a file
             filename = f"output/run_{i}_trajectory.png"
             plt.savefig(filename)
             plt.close() 
             print(f"   Saved plot to: {filename}")
         
-        # --- FILTERING ---
+        # filter if control was greater than threshold earlier
         filtered_augmented_trajectory = augmented_trajectory_run[active_steps_run]
         filtered_slacks = slack_values_run[active_steps_run]
         filtered_labels = labels_run[active_steps_run]
         
-        # Only aggregate if the run contributed meaningful data
+        # only add if the run contributed meaningful data (most will)
         if filtered_augmented_trajectory.shape[0] > 0:
             print(f"\n--- Simulation Run {i + 1} / {len(start_states)} ---")
             print(f"   Saved {filtered_augmented_trajectory.shape[0]} out of {time_steps} steps.")
             
-            # Aggregate the full augmented data set
+            # add the full augmented data set
             all_augmented_trajectories.append(filtered_augmented_trajectory)
             all_slacks.append(filtered_slacks)
             all_labels.append(filtered_labels)
             
         else:
+            # pretty rare case
             print(f"\n--- Simulation Run {i + 1} / {len(start_states)} ---")
-            print(f"   ⚠️ Run skipped: No active steps found (Control < {CONTROL_THRESHOLD}).")
+            print(f"    Run skipped: No active steps found (Control < {CONTROL_THRESHOLD}).")
 
 
-    # --- 4. CONCATENATION (Flattening for Variable Lengths) ---
+    # flatten
     X_data_flat = jnp.concatenate(all_augmented_trajectories, axis=0) 
     Y_labels_flat = jnp.concatenate(all_labels, axis=0)
     slacks_flat = jnp.concatenate(all_slacks, axis=0)
@@ -342,19 +335,19 @@ def main():
     print(f"Non-Critical (Label 0) Count:  {non_critical_count}")
     print(f"Proportion of Critical Data:   {critical_percentage:.2f}%")
 
-    # 5. SAVE TO MASTER NPZ FILE
+    # save to npz
     master_filename = "data/master_sim_data_filtered_augmented.npz" 
     print(f"\nSaving aggregated augmented data to: {master_filename}")
     
     np.savez_compressed(
         master_filename,
         
-        # PRIMARY TRAINING DATA (Flattened, Filtered)
-        X_data_flat=X_data_flat,       # CONTAINS [x, u, dx_goal, dx_obs]
+        # PRIMARY TRAINING DATA 
+        X_data_flat=X_data_flat,       
         Y_labels_flat=Y_labels_flat,   
         slacks_flat=slacks_flat,       
 
-        # Constants
+        # Constants (if needed)
         time_steps_max=time_steps, 
         dt=dt
     )
