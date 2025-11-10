@@ -12,32 +12,51 @@ import matplotlib
 matplotlib.use("Qt5Agg")  
 # matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
-def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps):
-    _, axs = plt.subplots(4)
-    axs[0].plot(trajectory[:,0], trajectory[:,1])
-    from matplotlib.patches import Circle
-    obstacle_circle = Circle((obstacle_state[0], obstacle_state[1]), radius, color='red', alpha=0.3)
-    axs[0].add_patch(obstacle_circle)
-    axs[0].set_xlabel('x')
-    axs[0].set_ylabel('y')
-    axs[0].set_aspect('equal') 
+def plot_trajectory(trajectory, slack_values, obstacle_states, radius, time_steps):
+    # Define a gridspec layout where the first subplot takes up more rows
+    fig = plt.figure(figsize=(8, 10))
+    gs = fig.add_gridspec(6, 1)  # total of 6 rows
+    ax0 = fig.add_subplot(gs[0:3, 0])  # first plot takes 3 rows
+    ax1 = fig.add_subplot(gs[3, 0])
+    ax2 = fig.add_subplot(gs[4, 0])
+    ax3 = fig.add_subplot(gs[5:, 0])
 
-    axs[0].set_xlim(-1, 16)
-    axs[0].set_ylim(-1, 16)
+    # --- Big trajectory plot (Modified for multiple obstacles) ---
+    ax0.plot(trajectory[:, 0], trajectory[:, 1], label='Trajectory')
+    
+    # Iterate over all obstacle states to plot a circle for each
+    for i, obs_state in enumerate(obstacle_states):
+        # CRITICAL FIX: Use .item() to convert JAX array elements to Python scalars 
+        center_x = obs_state[0].item()
+        center_y = obs_state[1].item()
+        
+        obstacle_circle = Circle(
+            (center_x, center_y), 
+            radius, 
+            color='red', 
+            alpha=0.3
+        )
+        ax0.add_patch(obstacle_circle)
+        
+    ax0.set_xlabel('x')
+    ax0.set_ylabel('y')
+    ax0.set_aspect('equal')
+    ax0.set_xlim(-1, 16)
+    ax0.set_ylim(-1, 16)
 
-    axs[1].plot(jnp.arange(time_steps), trajectory[:,2])
-    axs[1].set_xlabel('time step')
-    axs[1].set_ylabel('x control')
+    ax1.plot(jnp.arange(time_steps), trajectory[:, 2])
+    ax1.set_xlabel('time step')
+    ax1.set_ylabel('x control')
 
-    axs[2].plot(jnp.arange(time_steps), trajectory[:,3])
-    axs[2].set_xlabel('time step')
-    axs[2].set_ylabel('y control')
+    ax2.plot(jnp.arange(time_steps), trajectory[:, 3])
+    ax2.set_xlabel('time step')
+    ax2.set_ylabel('y control')
 
-    # TODO: uncomment this when CBF code is finished
-    axs[3].plot(jnp.arange(time_steps), slack_values)
-    axs[3].set_xlabel('time step')
-    axs[3].set_ylabel('slack variable')
+    ax3.plot(jnp.arange(time_steps), slack_values)
+    ax3.set_xlabel('time step')
+    ax3.set_ylabel('slack variable')
 
 @jax.jit
 def policy(state: jax.Array, goal: jax.Array, scale: float = 1.0) -> jax.Array:
@@ -86,11 +105,11 @@ def calculate_LQR_gains(Q, R, A, B, time_steps) :
 def LQR_policy(state: jax.Array, goal: jax.Array, K) -> jax.Array:
     # TODO: implement LQR
     state_error = state - goal
-    control = -1 * K[0] @ state_error
+    control = -1 * K @ state_error
     return control
 
 @jax.jit
-def form_cbf_qp(state: jax.Array, nominal_control: jax.Array, obstacle_state: jax.Array, radius: float, alpha: float) -> tuple:
+def form_cbf_qp(state: jax.Array, nominal_control: jax.Array, obstacle_states: jax.Array, radius: float, alpha: float) -> tuple:
     """Formulate CBF-QP problem for SingleIntegrator2D and return its parameters for qpax library.
 
     Args:
@@ -104,20 +123,24 @@ def form_cbf_qp(state: jax.Array, nominal_control: jax.Array, obstacle_state: ja
         tuple: CBF-QP parameters (Q, q, A, b, G, h)
     """
     # TODO: implement CBF-QP
-    p = state - obstacle_state # 2 x 1
-    h_x = p.T @ p - radius**2 
-    grad_h = 2.0 * p
-    Lf_h = 0.0
-    Lg_h = grad_h
+    p = state - obstacle_states 
+    h_x = jnp.sum(p * p, axis=1) - radius**2  
 
-    # QP parameters
-    G = -jnp.expand_dims(Lg_h, axis=0)
-    h_qp = Lf_h + alpha * h_x
-    h = jnp.array([h_qp])
+    # basically, we want to just focus on the closest obstacle to prevent the QP from not finding a control
+    critical_index = jnp.argmin(h_x) 
+
+    # now we work only wth the critical_index or the closest obstacle
+    h_critical = h_x[critical_index]
+    Lg_h_critical = 2.0 * p[critical_index] 
+    Lf_h_critical = 0.0 # Lf_h is always 0 for SingleIntegrator2D
+
     Q = jnp.eye(2)
     q = -2.0 * nominal_control
     A = jnp.empty((0, 2))
     b = jnp.empty((0,))
+    G = -jnp.expand_dims(Lg_h_critical, axis=0) # Must be (1, 2)
+    h = jnp.expand_dims(Lf_h_critical + alpha * h_critical, axis=0) # Must be (1,)
+
     return Q, q, A, b, G, h
 
 @jax.jit
@@ -162,13 +185,13 @@ def main():
 
     # agent state and goal init
     state = jnp.zeros(dynamics.state_dim)
-    goal_state = jnp.array([10, 10.0001])
+    goal_state = jnp.array([10, 14])
 
     # obstacle 
-    obstacle_state = jnp.array([5,5])
+    obstacle_states = jnp.array([[3,5], [5, 10]])
     
     # safety profile
-    radius = 3
+    radius = 2
     alpha = 2
 
     # LQR params
@@ -185,10 +208,10 @@ def main():
     for k in range(time_steps):
         # nominal control
         # control = policy(state, goal_state)
-        control = LQR_policy(state, goal_state, K)
+        control = LQR_policy(state, goal_state, K[k])
         # TODO: uncomment this when CBF code is finished
         # # augment control for safety
-        control, slack = apply_CBF(state, control, obstacle_state, radius, alpha)
+        control, slack = apply_CBF(state, control, obstacle_states, radius, alpha)
 
 
         # upate trajectory history
@@ -203,9 +226,9 @@ def main():
     # TODO: uncomment this when CBF code is finished
     slack_values = jnp.array(slack_values).squeeze()
     labels = generate_labels(slack_values)
-    np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_state, radius=radius, alpha=alpha, labels=labels)
+    np.savez("data/safe_profile", trajectory=trajectory, slack=slack_values, obstacle=obstacle_states, radius=radius, alpha=alpha, labels=labels)
 
-    plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps)
+    plot_trajectory(trajectory, slack_values, obstacle_states, radius, time_steps)
     plt.show()
     # plt.savefig("output/cbf.png")
 

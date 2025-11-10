@@ -11,12 +11,14 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg") # Using 'Agg' is better for no gui
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
 def plot_trajectory(trajectory, slack_values, obstacle_state, radius, time_steps, goal_state):
+
     _, axs = plt.subplots(4)
     axs[0].plot(trajectory[:,0], trajectory[:,1])
-    from matplotlib.patches import Circle
     obstacle_circle = Circle((obstacle_state[0], obstacle_state[1]), radius, color='red', alpha=0.3)
+    
     axs[0].add_patch(obstacle_circle)
     axs[0].set_xlabel('x')
     axs[0].set_ylabel('y')
@@ -125,20 +127,22 @@ def run_sim(state, goal_state, obstacle_state, run_id):
         safe_control, slack = apply_CBF(state, control, obstacle_state, radius, alpha) 
 
         # these are new features for NN
-        relative_goal = goal_state - state
         relative_obstacle = state - obstacle_state 
         
-        # 8D feature vector
+        # 6D feature vector
         augmented_feature_vector = jnp.concatenate([
             state, 
-            safe_control, 
-            relative_goal, 
+            safe_control,
             relative_obstacle
         ]).squeeze()
 
         # filter out state-action pairs where there's barely any movement
-        control_magnitude = jnp.linalg.norm(safe_control)
-        is_active = (control_magnitude > CONTROL_THRESHOLD)
+        # New logic: Drop if state is near the goal
+        distance_to_goal = jnp.linalg.norm(state - goal_state)
+        is_near_goal = (distance_to_goal < GOAL_PROXIMITY_THRESHOLD)
+        is_active = jnp.logical_not(is_near_goal)
+
+        
         active_steps.append(is_active)
 
         # Update history
@@ -164,7 +168,7 @@ def run_sim(state, goal_state, obstacle_state, run_id):
 time_steps = 50
 dt = 0.1
 dynamics = SingleIntegrator2D()
-CONTROL_THRESHOLD = 0.05 # if control is below this, data point is not worth looking at
+GOAL_PROXIMITY_THRESHOLD = 0.1 # if control is below this, data point is not worth looking at
 # safety profile
 radius = 3
 alpha = 2
@@ -259,7 +263,7 @@ def generate_zoned_states():
     return start_list, goal_list, obstacle_list
 
 def main():
-    start_states, goal_states, obstacle_states = generate_zoned_states(200)
+    start_states, goal_states, obstacle_states = generate_zoned_states()
     
     # plot these tests
     PLOT_INDICES = {40, 80, 120, 160, 199}
