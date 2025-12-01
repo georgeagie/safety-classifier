@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 #read all the .png files in directory called `steps`
-files = glob.glob("output/frames_static_obs/*.png")
+files = glob.glob("output/frames_dynamic_obs/*.png")
 files.sort()
 
 from PIL import Image
@@ -36,4 +36,4 @@ animation_fig = animation.FuncAnimation(fig, update, frames=len(image_array), in
 # Show the animation
 plt.show()
 
-animation_fig.save("output/GIFs/static_obs.gif")
+animation_fig.save("output/GIFs/dynamic_obs.gif")
