@@ -93,7 +93,7 @@ def plot_trajectory(trajectory, deviation_values, obstacle_states, radius, time_
     ax3.plot(jnp.arange(time_steps), deviation_values)
     ax3.set_xlabel('time step')
     # Update the label
-    ax3.set_ylabel('Control Deviation (Norm)')
+    ax3.set_ylabel('Control Deviation')
 
 def create_frame(ax, k, trajectory_history, deviation_history, obstacle_states, radius, goal_state, time_steps):
     """Updates the main trajectory plot for a single frame (step k)."""
@@ -140,7 +140,7 @@ def create_frame(ax, k, trajectory_history, deviation_history, obstacle_states, 
         
     # --- MODIFIED ---
     # Update title to show deviation
-    ax.set_title(f"Simulation Step {k+1}/{time_steps} | Deviation: {current_deviation:.2f}", fontsize=12)
+    ax.set_title(f"Simulation Step {k+1}/{time_steps}", fontsize=12)
     ax.set_xlim(-1, 16)
     ax.set_ylim(-1, 16)
     ax.set_xlabel('x')
@@ -286,7 +286,7 @@ def main():
     goal_state = jnp.array([10, 14, 0, 0])
 
     # obstacle 
-    obstacle_states = jnp.array([[3,5, 0.4, 0], [7, 7, 0, 0.6]])
+    obstacle_states = jnp.array([[3,5, 0, 0], [9, 7.5, 0, 0]])
     
     # safety profile
     radius = 2
@@ -313,7 +313,7 @@ def main():
 
     png_fig, png_ax = plt.subplots(figsize=(6, 6))
     # Create a separate folder for the many frames
-    frame_dir = "output/frames_dynamic_obs"
+    frame_dir = "output/frames_static_obs"
     print(f"Starting simulation. Saving {time_steps} image files to {frame_dir}.")
     os.makedirs(frame_dir, exist_ok=True)
     

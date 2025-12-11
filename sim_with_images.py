@@ -212,8 +212,8 @@ def main():
     image_filenames = []
     saved_indices = [] # time_steps that pass the filter
     
-    if not os.path.exists("output/sim_images"):
-        os.makedirs("output/sim_images")
+    if not os.path.exists("output/si2d_sim_images"):
+        os.makedirs("output/si2d_sim_images")
 
     for k in range(time_steps):
         # nominal
@@ -228,7 +228,7 @@ def main():
         # only significant points are saved (get rid of ones very close to goal)
         distance_to_goal = jnp.linalg.norm(state - goal_state)
         if (distance_to_goal >= GOAL_PROXIMITY_THRESHOLD):
-            image_filename = f"output/sim_images/sim_frame_{k:04d}.png"
+            image_filename = f"output/si2d_sim_images/sim_frame_{k:04d}.png"
             generate_sim_diagram(current_trajectory, obstacle_states, radius, image_filename)
             image_filenames.append(image_filename)
             saved_indices.append(k)
